@@ -1,0 +1,7 @@
+Considere o ip da clasee a, b, ou  c
+é necessário dividir em x subnets
+
+endereco de rede
+broadcast
+1 maquina
+ultima maquina
