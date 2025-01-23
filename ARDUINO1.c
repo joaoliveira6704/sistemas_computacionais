@@ -1,83 +1,120 @@
-// Incluir a biblioteca DHT da ADAFRUIT
 #include <DHT.h>
+// Include SoftwareSerial for Bluetooth communication
+#include <SoftwareSerial.h>
 
 // Definir PIN e tipo sensor
 #define DHTPIN 4       // Pino DATA
 #define DHTTYPE DHT11  // Tipo de sensor
 
 //Definir PIN LEDS
-const int LED_GREEN = 9;// Led Verde
-const int LED_RED = 10; // Led Vermelho
+const int LED_GREEN = 10; // Led Verde
+const int LED_RED = 9;    // Led Vermelho
+
+// Bluetooth module pins (RX and TX)
+#define BT_RX 2
+#define BT_TX 3
 
 // Inicializar o sensor
 DHT dht(DHTPIN, DHTTYPE);
 
-// Função para calcular o índice de calor aka (Sensação Térmica)
+// Variáveis globais para armazenar valores
+float heatIndex = 0;
+float temperature = 0;
+float humidity = 0;
+int gasVal = 0;
+int alcVal = 0;
+
+SoftwareSerial bluetooth(BT_RX, BT_TX); // RX, TX
+
+// Função para calcular o índice de calor
 float computeHeatIndex(float temperature, float humidity) {
-  // Converter a temperatura para Fahrenheit
-  float T = (temperature * 1.8) + 32;
+  float T = (temperature * 1.8) + 32; // Celsius para Fahrenheit
   float H = humidity;
 
-  // Fórmula simplificada para Heat Index (Valores são constantes obtidas pela NOAA)
-  float HI = -42.379 + 2.04901523 * T + 10.14333127 * H - 0.22475541 * T * H 
+  // Fórmula simplificada para índice de calor (NOAA)
+  float HI = -42.379 + 2.04901523 * T + 10.14333127 * H - 0.22475541 * T * H
              - 0.00683783 * T * T - 0.05481717 * H * H + 0.00122874 * T * T * H
              + 0.00085282 * T * H * H - 0.00000199 * T * T * H * H;
 
-  // Converter de volta para Celsius
-  return (HI - 32) / 1.8;
+  return (HI - 32) / 1.8; // Retorna em Celsius
 }
 
 void setup() {
   // Iniciar a comunicação em série
   Serial.begin(9600);
-  Serial.println("DHT11 Sensor Test");
-
+  bluetooth.begin(9600); // Inicializa comunicação Bluetooth
+  Serial.println("DHT11 Sensor Test with Bluetooth");
+  Serial.println("The device started, now you can pair it with bluetooth!");
   pinMode(LED_GREEN, OUTPUT);
   pinMode(LED_RED, OUTPUT);
 
   digitalWrite(LED_GREEN, LOW);
   digitalWrite(LED_RED, LOW);
 
-  // Inicializar a leitura do sensor
+  // Inicializar o sensor DHT
   dht.begin();
 }
 
 void loop() {
-  // Esperar 2 segundos entre leituras
-  delay(2000);
+  // Ler temperatura e umidade
+  humidity = dht.readHumidity();
+  temperature = dht.readTemperature();
+  gasVal = analogRead(0);     // Leitura do sensor de gás no pino A0
+  alcVal = analogRead(1);     // Leitura do sensor de álcool no pino A1
+  heatIndex = computeHeatIndex(temperature, humidity);
 
-  // Ler temperatura e humidade
-  float humidity = dht.readHumidity();
-  float temperature = dht.readTemperature(); // Default in Celsius
-
-  // Verifica que as leituras são válidas
+  // Verifica se as leituras são válidas
   if (isnan(humidity) || isnan(temperature)) {
     Serial.println("Failed to read from DHT sensor!");
+    bluetooth.println("Error reading DHT sensor");
     return;
   }
 
-  // Apresentar Resultados
-  Serial.print("Humidade: ");
-  Serial.print(humidity);
-  Serial.print(" %\t");
-  Serial.print("Temperatura: ");
-  Serial.print(temperature);
-  Serial.println(" ºC");
-  Serial.print(" %\t");
-
-  // Calcular índice de calor (Heat Index)
-  float heatIndex = computeHeatIndex(temperature, humidity);
-  Serial.print("Indíce de Calor: ");
-  Serial.print(heatIndex);
-
-  // Controlar LEDs com base na temperatura 
-  if (heatIndex < 24.90) {
-    // Se a temperatura for maior que 30 ºC, ligar LED vermelho
+  // Controlar LEDs e enviar mensagem por Bluetooth
+  if (heatIndex < 24.90 && gasVal < 180 && alcVal < 610) {
+    // Condições seguras
     digitalWrite(LED_GREEN, HIGH);
     digitalWrite(LED_RED, LOW);
+    Serial.println("All Values are OK");
+    bluetooth.println("All Values are OK");
   } else {
-    // Caso contrário, ligar LED verde
+    // Condição de perigo
     digitalWrite(LED_GREEN, LOW);
     digitalWrite(LED_RED, HIGH);
+
+    // Enviar mensagens detalhadas
+    if (heatIndex > 24.90) {
+      Serial.println("Heat Index too high!");
+      bluetooth.println("Heat Index too high!");
+    }
+    if (gasVal > 180) {
+      Serial.println("Gas Value too high!");
+      bluetooth.println("Gas Value too high!");
+    }
+    if (alcVal > 610) {
+      Serial.println("Alcohol Value too high!");
+      bluetooth.println("Alcohol Value too high!");
+    }
   }
+
+  // Enviar dados atuais ao dispositivo Bluetooth
+  bluetooth.print("Temperature: ");
+  bluetooth.print(temperature);
+  bluetooth.println(" °C");
+
+  bluetooth.print("Humidity: ");
+  bluetooth.print(humidity);
+  bluetooth.println(" %");
+
+  bluetooth.print("Gas Value: ");
+  bluetooth.println(gasVal);
+
+  bluetooth.print("Alcohol Value: ");
+  bluetooth.println(alcVal);
+
+  bluetooth.print("Heat Index: ");
+  bluetooth.println(heatIndex);
+
+  // Esperar 2 segundos antes da próxima leitura
+  delay(2000);
 }

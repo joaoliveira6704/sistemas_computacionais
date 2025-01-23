@@ -1,0 +1,192 @@
+#include <DHT.h>
+#include <SoftwareSerial.h>
+#include <EEPROM.h>
+
+// Definir PIN e tipo sensor
+#define DHTPIN 4       // Pino DATA
+#define DHTTYPE DHT11  // Tipo de sensor
+
+// Definir PIN LEDS
+const int LED_GREEN = 10; // Led Verde
+const int LED_RED = 9;    // Led Vermelho
+
+// Bluetooth module pins (RX and TX)
+#define BT_RX 0
+#define BT_TX 1
+
+// Inicializar o sensor
+DHT dht(DHTPIN, DHTTYPE);
+
+// Variáveis globais para armazenar valores
+float heatIndex = 0;
+float temperature = 0;
+float humidity = 0;
+int gasVal = 0;
+int alcVal = 0;
+String timestamp = "2000-01-01 00:00:00"; // Data/hora inicial
+
+// Variáveis EEPROM
+int eepromIndex = 0; // Índice para a próxima gravação
+int eepromMax = EEPROM.length(); // Tamanho total da EEPROM
+
+SoftwareSerial bluetooth(BT_RX, BT_TX); // RX, TX
+
+void setup() {
+  Serial.begin(9600);
+  bluetooth.begin(9600);
+
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_RED, OUTPUT);
+  digitalWrite(LED_GREEN, LOW);
+  digitalWrite(LED_RED, LOW);
+
+  Serial.println("Dispositivo iniciado. Aguarde comandos Bluetooth.");
+  bluetooth.println("Dispositivo iniciado. Envie a hora com 'SETTIME'.");
+  dht.begin();
+}
+
+void loop() {
+  // Verificar comandos Bluetooth
+  if (bluetooth.available()) {
+    String command = bluetooth.readStringUntil('\n');
+    command.trim(); // Remove espaços extras
+    processCommand(command);
+  }
+
+  // Lógica de leitura e gravação
+  readSensors();
+  checkAndSaveData();
+  delay(2000); // Intervalo de 2 segundos
+}
+
+// Função para processar comandos Bluetooth
+void processCommand(String command) {
+  if (command.startsWith("SETTIME")) {
+    // Define o timestamp (formato: SETTIME YYYY-MM-DD HH:MM:SS)
+    timestamp = command.substring(8); // Pega tudo após "SETTIME "
+    Serial.print("Hora definida para: ");
+    Serial.println(timestamp);
+    bluetooth.print("Hora definida para: ");
+    bluetooth.println(timestamp);
+  } else if (command == "ERASE") {
+    // Apaga toda a EEPROM
+    for (int i = 0; i < eepromMax; i++) {
+      EEPROM.write(i, 0);
+    }
+    eepromIndex = 0; // Reinicia o índice
+    Serial.println("EEPROM apagada.");
+    bluetooth.println("EEPROM apagada.");
+  } else if (command == "STATUS") {
+    // Retorna o uso da EEPROM
+    int usage = (eepromIndex * 100) / eepromMax;
+    bluetooth.print("EEPROM Usage: ");
+    bluetooth.print(usage);
+    bluetooth.println("%");
+    if (usage >= 90) {
+      bluetooth.println("EEPROM quase cheia! Envie 'ERASE' para apagar.");
+    }
+  } else {
+    bluetooth.println("Comando desconhecido.");
+  }
+}
+
+// Função para ler os sensores
+void readSensors() {
+  humidity = dht.readHumidity();
+  temperature = dht.readTemperature();
+  gasVal = analogRead(0); // Sensor de gás no pino A0
+  alcVal = analogRead(1); // Sensor de álcool no pino A1
+  heatIndex = computeHeatIndex(temperature, humidity);
+
+  if (isnan(humidity) || isnan(temperature)) {
+    Serial.println("Erro ao ler o sensor DHT!");
+    bluetooth.println("Erro ao ler o sensor DHT!");
+    return;
+  }
+
+  // Mostrar valores lidos via Serial
+  Serial.print("Timestamp: ");
+  Serial.println(timestamp);
+  Serial.print("Temperatura: ");
+  Serial.print(temperature);
+  Serial.println(" °C");
+  Serial.print("Humidade: ");
+  Serial.print(humidity);
+  Serial.println(" %");
+  Serial.print("Gás: ");
+  Serial.println(gasVal);
+  Serial.print("Álcool: ");
+  Serial.println(alcVal);
+  Serial.print("Heat Index: ");
+  Serial.println(heatIndex);
+}
+
+// Função para verificar e salvar dados anormais
+void checkAndSaveData() {
+  bool allValuesOk = (heatIndex < 24.90 && gasVal < 180 && alcVal < 610);
+
+  if (allValuesOk) {
+    // Todos os valores estão dentro do normal
+    Serial.println("Todos os valores estão OK.");
+    bluetooth.println("Todos os valores estão OK.");
+    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_RED, LOW);
+  } else {
+    // Algum valor está fora do normal
+    Serial.println("Atenção! Valores fora do normal.");
+    bluetooth.println("Atenção! Valores fora do normal.");
+    digitalWrite(LED_GREEN, LOW);
+    digitalWrite(LED_RED, HIGH);
+
+    // Salvar dados na EEPROM
+    saveToEEPROM();
+  }
+
+  // Verificar se a EEPROM está quase cheia
+  int usage = (eepromIndex * 100) / eepromMax;
+  if (usage >= 90) {
+    bluetooth.println("EEPROM quase cheia! Envie o comando 'ERASE'.");
+    Serial.println("EEPROM quase cheia! LED piscando.");
+    blinkBuiltinLed();
+  }
+}
+
+// Função para salvar dados na EEPROM
+void saveToEEPROM() {
+  if (eepromIndex + timestamp.length() + 5 < eepromMax) {
+    for (int i = 0; i < timestamp.length(); i++) {
+      EEPROM.write(eepromIndex++, timestamp[i]);
+    }
+    EEPROM.write(eepromIndex++, '|');
+    EEPROM.write(eepromIndex++, (int)temperature);
+    EEPROM.write(eepromIndex++, (int)humidity);
+    EEPROM.write(eepromIndex++, gasVal);
+    EEPROM.write(eepromIndex++, alcVal);
+
+    Serial.println("Dados salvos na EEPROM.");
+    bluetooth.println("Dados salvos na EEPROM.");
+  } else {
+    Serial.println("EEPROM cheia! Envie o comando 'ERASE'.");
+    bluetooth.println("EEPROM cheia! Envie o comando 'ERASE'.");
+  }
+}
+
+// Função para piscar o LED interno quando a EEPROM está quase cheia
+void blinkBuiltinLed() {
+  for (int i = 0; i < 5; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(200);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(200);
+  }
+}
+
+// Função para calcular o índice de calor
+float computeHeatIndex(float temperature, float humidity) {
+  float T = (temperature * 1.8) + 32;
+  float H = humidity;
+  float HI = -42.379 + 2.04901523 * T + 10.14333127 * H - 0.22475541 * T * H
+             - 0.00683783 * T * T - 0.05481717 * H * H + 0.00122874 * T * T * H
+             + 0.00085282 * T * H * H - 0.00000199 * T * T * H * H;
+  return (HI - 32) / 1.8;
+}
